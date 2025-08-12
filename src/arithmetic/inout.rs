@@ -247,19 +247,23 @@ pub struct AliasingSlices3FromRawParts<T> {
 
 impl<T> AliasingSlices3FromRawParts<T> {
     #[inline(always)]
-    pub unsafe fn new_rab_unchecked(r: *mut T, a: *const T, b: *const T, len: NonZeroUsize) -> Self {
-        Self {
-            r,
-            a,
-            b,
-            len,
-        }
+    pub unsafe fn new_rab_unchecked(
+        r: *mut T,
+        a: *const T,
+        b: *const T,
+        len: NonZeroUsize,
+    ) -> Self {
+        Self { r, a, b, len }
     }
 }
 
-impl AliasingSlices3<T> for AliasingSlices3FromRawParts<()> {
+impl<T> AliasingSlices3<T> for AliasingSlices3FromRawParts<T> {
     #[inline(always)]
-    fn with_potentially_dangling_non_null_pointers_rab<R>(self, expected_len: usize, f: impl FnOnce(*mut T, *const T, *const T) -> R) -> Result<R, LenMismatchError> {
+    fn with_potentially_dangling_non_null_pointers_rab<R>(
+        self,
+        expected_len: usize,
+        f: impl FnOnce(*mut T, *const T, *const T) -> R,
+    ) -> Result<R, LenMismatchError> {
         if expected_len != self.len.get() {
             return Err(LenMismatchError::new(self.len.get()));
         }

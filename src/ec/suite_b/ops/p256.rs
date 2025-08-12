@@ -16,11 +16,9 @@ use super::{
     elem::{binary_op, binary_op_assign},
     elem_sqr_mul, elem_sqr_mul_acc, PublicModulus, *,
 };
-use crate::{polyfill::unwrap_const,
-            arithmetic::inout::{AliasingSlices3, AliasingSlices3FromRawParts}
-    };
-use core::num::NonZeroUsize;
+use crate::polyfill::unwrap_const;
 use cfg_if::cfg_if;
+use core::num::NonZeroUsize;
 
 pub(super) const NUM_LIMBS: NonZeroUsize = unwrap_const(NonZeroUsize::new(256 / LIMB_BITS));
 
@@ -39,17 +37,6 @@ pub static COMMON_OPS: CommonOps = CommonOps {
     elem_mul_mont: p256_mul_mont,
     elem_sqr_mont: p256_sqr_mont,
 };
-
-#[inline(always)]
-fn n() -> &'static [Limb] { &COMMON_OPS.n.limbs[..NUM_LIMBS] }
-
-const N_N0: N0 = N0::precalculated(0xccd1c8aa_ee00bc4f);
-
-#[inline(always)]
-unsafe fn assume_rab(r: *mut Limb, a: *const Limb, b: *const Limb) -> impl AliasingSlices3 {
-
-    unsafe { AliasingSlices3FromRawParts::new_rab_unchecked(r, a, b, P256_LIMBS_NZ) }
-}
 
 #[cfg(test)]
 pub(super) static GENERATOR: (PublicElem<R>, PublicElem<R>) = (
@@ -134,17 +121,53 @@ pub static SCALAR_OPS: ScalarOps = ScalarOps {
     scalar_mul_mont: p256_scalar_mul_mont,
 };
 
-extern "C" fn p256_scalar_mul_mont(
-    r: *mut Limb,   // [COMMON_OPS.num_limbs]
-    a: *const Limb, // [COMMON_OPS.num_limbs]
-    b: *const Limb, // [COMMON_OPS.num_limbs]
-) {
-    let cpu = cpu::features(); // TODO: caller should supply this
-    // XXX: Inefficient. TODO: optimize with dedicated multiplication routine
-    limbs_mul_mont(unsafe { assume_rab(r, a, b) }, n_limbs(), &N_N0, cpu);
+cfg_if! {
+    if #[cfg(any(all(target_arch = "aarch64", target_endian = "little"),
+                 target_arch = "x86_64"))] {
+        prefixed_extern! {
+            fn p256_scalar_mul_mont(
+                r: *mut Limb,    // [COMMON_OPS.num_limbs]
+                a: *const Limb,  // [COMMON_OPS.num_limbs]
+                b: *const Limb); // [COMMON_OPS.num_limbs]
+            fn p256_scalar_sqr_rep_mont(
+                r: *mut Limb,   // [COMMON_OPS.num_limbs]
+                a: *const Limb, // [COMMON_OPS.num_limbs]
+                rep: LeakyWord);
+        }
+    } else {
+        use crate::arithmetic::{inout::AliasingSlices3FromRawParts, LimbSliceError};
+
+        static N_N0: N0 = N0::precalculated(0xccd1c8aa_ee00bc4f);
+
+        unsafe extern "C" fn p256_scalar_mul_mont(
+            r: *mut Limb,   // [COMMON_OPS.num_limbs]
+            a: *const Limb, // [COMMON_OPS.num_limbs]
+            b: *const Limb, // [COMMON_OPS.num_limbs]
+        ) {
+            // XXX: Inefficient. TODO: optimize with dedicated multiplication routine
+            // TODO: Caller should pass in an `impl AliasingSlices3`.
+            let in_out = unsafe { AliasingSlices3FromRawParts::new_rab_unchecked(r, a, b, NUM_LIMBS) };
+            let n = &COMMON_OPS.n.limbs[..NUM_LIMBS.get()];
+            let cpu = cpu::features(); // TODO: caller should supply this
+            limbs_mul_mont(in_out, n, &N_N0, cpu).unwrap_or_else(|e| match e {
+                LimbSliceError::LenMismatch(_)
+                | LimbSliceError::TooShort(_)
+                | LimbSliceError::TooLong(_) => unreachable!(),
+            })
+        }
+
+        unsafe fn p256_scalar_sqr_rep_mont(
+            r: *mut Limb,   // [COMMON_OPS.num_limbs]
+            a: *const Limb, // [COMMON_OPS.num_limbs]
+            rep: LeakyWord) {
+            debug_assert!(rep >= 1);
+            p256_scalar_mul_mont(r, a, a);
+            for _ in 1..rep {
+                unsafe { p256_scalar_mul_mont(r, r, r); }
+            }
+        }
+    }
 }
-
-
 
 pub static PUBLIC_SCALAR_OPS: PublicScalarOps = PublicScalarOps {
     scalar_ops: &SCALAR_OPS,
@@ -326,12 +349,6 @@ prefixed_extern! {
         p_scalar: *const Limb, // [COMMON_OPS.num_limbs]
         p_x: *const Limb,      // [COMMON_OPS.num_limbs]
         p_y: *const Limb,      // [COMMON_OPS.num_limbs]
-    );
-
-    fn p256_scalar_sqr_rep_mont(
-        r: *mut Limb,   // [COMMON_OPS.num_limbs]
-        a: *const Limb, // [COMMON_OPS.num_limbs]
-        rep: LeakyWord,
     );
 }
 
