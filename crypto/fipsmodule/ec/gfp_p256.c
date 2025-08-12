@@ -36,12 +36,6 @@ static const BN_ULONG N_N0[] = {
   BN_MONT_CTX_N0(0xccd1c8aa, 0xee00bc4f)
 };
 
-void p256_scalar_mul_mont(ScalarMont r, const ScalarMont a,
-                              const ScalarMont b) {
-  /* XXX: Inefficient. TODO: optimize with dedicated multiplication routine. */
-  bn_mul_mont_small(r, a, b, N, N_N0, P256_LIMBS);
-}
-
 /* XXX: Inefficient. TODO: optimize with dedicated squaring routine. */
 void p256_scalar_sqr_rep_mont(ScalarMont r, const ScalarMont a, Limb rep) {
   dev_assert_secret(rep >= 1);

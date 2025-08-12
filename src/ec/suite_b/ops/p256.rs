@@ -16,9 +16,11 @@ use super::{
     elem::{binary_op, binary_op_assign},
     elem_sqr_mul, elem_sqr_mul_acc, PublicModulus, *,
 };
-use crate::polyfill::unwrap_const;
-use cfg_if::cfg_if;
+use crate::{polyfill::unwrap_const,
+            arithmetic::inout::{AliasingSlices3, AliasingSlices3FromRawParts}
+    };
 use core::num::NonZeroUsize;
+use cfg_if::cfg_if;
 
 pub(super) const NUM_LIMBS: NonZeroUsize = unwrap_const(NonZeroUsize::new(256 / LIMB_BITS));
 
@@ -37,6 +39,17 @@ pub static COMMON_OPS: CommonOps = CommonOps {
     elem_mul_mont: p256_mul_mont,
     elem_sqr_mont: p256_sqr_mont,
 };
+
+#[inline(always)]
+fn n() -> &'static [Limb] { &COMMON_OPS.n.limbs[..NUM_LIMBS] }
+
+const N_N0: N0 = N0::precalculated(0xccd1c8aa_ee00bc4f);
+
+#[inline(always)]
+unsafe fn assume_rab(r: *mut Limb, a: *const Limb, b: *const Limb) -> impl AliasingSlices3 {
+
+    unsafe { AliasingSlices3FromRawParts::new_rab_unchecked(r, a, b, P256_LIMBS_NZ) }
+}
 
 #[cfg(test)]
 pub(super) static GENERATOR: (PublicElem<R>, PublicElem<R>) = (
@@ -120,6 +133,18 @@ pub static SCALAR_OPS: ScalarOps = ScalarOps {
     common: &COMMON_OPS,
     scalar_mul_mont: p256_scalar_mul_mont,
 };
+
+extern "C" fn p256_scalar_mul_mont(
+    r: *mut Limb,   // [COMMON_OPS.num_limbs]
+    a: *const Limb, // [COMMON_OPS.num_limbs]
+    b: *const Limb, // [COMMON_OPS.num_limbs]
+) {
+    let cpu = cpu::features(); // TODO: caller should supply this
+    // XXX: Inefficient. TODO: optimize with dedicated multiplication routine
+    limbs_mul_mont(unsafe { assume_rab(r, a, b) }, n_limbs(), &N_N0, cpu);
+}
+
+
 
 pub static PUBLIC_SCALAR_OPS: PublicScalarOps = PublicScalarOps {
     scalar_ops: &SCALAR_OPS,
@@ -303,11 +328,6 @@ prefixed_extern! {
         p_y: *const Limb,      // [COMMON_OPS.num_limbs]
     );
 
-    fn p256_scalar_mul_mont(
-        r: *mut Limb,   // [COMMON_OPS.num_limbs]
-        a: *const Limb, // [COMMON_OPS.num_limbs]
-        b: *const Limb, // [COMMON_OPS.num_limbs]
-    );
     fn p256_scalar_sqr_rep_mont(
         r: *mut Limb,   // [COMMON_OPS.num_limbs]
         a: *const Limb, // [COMMON_OPS.num_limbs]
